@@ -1,0 +1,16 @@
+src/
+tsconfig.json
+tsconfig.test.json
+jest.config.js
+esbuild.config.js
+esbuild.auth-utils.js
+WORKSPACE-Context.md
+CLAUDE.md
+.github/
+.git/
+.gitignore
+*.log
+.DS_Store
+coverage/
+node_modules/
+dist/.tsbuildinfo

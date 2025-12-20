@@ -1,0 +1,52 @@
+{
+  "name": "@presto-ai/google-workspace-mcp",
+  "version": "1.0.0",
+  "description": "NPM-distributable Google Workspace MCP server for Claude Desktop, Claude Code CLI, and Chatwise",
+  "main": "dist/index.js",
+  "bin": {
+    "google-workspace-mcp": "./bin/cli.js"
+  },
+  "scripts": {
+    "test": "node --max-old-space-size=4096 node_modules/jest/bin/jest.js --runInBand --verbose",
+    "test:watch": "jest --watch",
+    "test:coverage": "node --max-old-space-size=4096 node_modules/jest/bin/jest.js --coverage",
+    "test:ci": "node --max-old-space-size=4096 node_modules/jest/bin/jest.js --ci --coverage --maxWorkers=2",
+    "start": "ts-node src/index.ts",
+    "clean": "rm -rf dist node_modules",
+    "build": "node esbuild.config.js && npm run build:bin",
+    "build:bin": "chmod +x bin/cli.js",
+    "build:auth-utils": "node esbuild.auth-utils.js",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "google-workspace",
+    "gmail",
+    "calendar",
+    "drive",
+    "docs",
+    "sheets",
+    "chat",
+    "claude"
+  ],
+  "author": "Presto AI",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jrenaldi79/google-workspace-mcp"
+  },
+  "type": "commonjs",
+  "files": [
+    "dist/",
+    "bin/",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "devDependencies": {
+    "esbuild": "^0.27.1"
+  }
+}
