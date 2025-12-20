@@ -34,9 +34,18 @@ export async function runAuthFlow(): Promise<void> {
     console.log('Opening browser for Google authentication...');
     console.log('Please log in and grant the requested permissions.\n');
 
+    logToFile('Starting authentication flow');
+
     // Force re-authentication to get fresh credentials
     // This will open the browser automatically
-    await authManager.getAuthenticatedClient();
+    const client = await authManager.getAuthenticatedClient();
+
+    // Verify that credentials were actually obtained
+    if (!client) {
+      throw new Error('Failed to obtain authenticated client - no client returned');
+    }
+
+    logToFile('Successfully obtained authenticated client');
 
     console.log('\n✅ Authentication successful!');
     console.log('Tokens have been saved securely.');
@@ -52,6 +61,10 @@ export async function runAuthFlow(): Promise<void> {
     logToFile(`Authentication failed: ${errorMsg}`);
     console.error('\n❌ Authentication failed. Please try again.');
     console.error(`Error: ${errorMsg}\n`);
+    console.error('Troubleshooting:');
+    console.error('1. Make sure your browser window opened (check taskbar/dock)');
+    console.error('2. Check logs at: ~/.config/google-workspace-mcp/logs/');
+    console.error('');
     process.exit(1);
   }
 }
