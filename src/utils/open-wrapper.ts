@@ -31,19 +31,26 @@ const createMockChildProcess = () => ({
 });
 
 const openWrapper = async (url: string): Promise<any> => {
+  console.error('\n[OPEN-WRAPPER] Called with URL:', url.substring(0, 50) + '...');
+
   // Check if we should launch the browser
   if (!shouldLaunchBrowser()) {
+    console.error('[OPEN-WRAPPER] Browser launch not supported');
     console.log(`Browser launch not supported. Please open this URL in your browser:\n${url}`);
     console.error('ERROR: Browser launch conditions not met. Cannot proceed with authentication.');
     throw new Error('Browser launch not supported in this environment');
   }
 
+  console.error('[OPEN-WRAPPER] Attempting to open browser securely...');
+
   // Try to open the browser securely
   try {
     await openBrowserSecurely(url);
+    console.error('[OPEN-WRAPPER] Browser opened successfully');
     return createMockChildProcess();
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
+    console.error(`[OPEN-WRAPPER] Browser opening failed: ${errorMsg}`);
     console.error(`\n❌ Failed to open browser: ${errorMsg}`);
     console.error(`\nPlease open this URL manually in your browser:\n${url}`);
     throw new Error(`Browser opening failed: ${errorMsg}`);
