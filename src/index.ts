@@ -23,8 +23,6 @@ import { GMAIL_SEARCH_MAX_RESULTS } from "./utils/constants";
 import { extractDocId } from "./utils/IdUtils";
 
 import { setLoggingEnabled, logToFile } from "./utils/logger";
-import { ENCRYPTED_TOKEN_PATH } from "./utils/paths";
-import * as fs from "node:fs";
 
 // Shared schemas for Gmail tools
 const emailComposeSchema = {
@@ -54,32 +52,15 @@ const SCOPES = [
 import { version } from '../package.json';
 
 /**
- * Checks if valid credentials exist for the MCP server.
- * Returns true if credentials file exists, false otherwise.
- */
-function hasValidCredentials(): boolean {
-  try {
-    return fs.existsSync(ENCRYPTED_TOKEN_PATH);
-  } catch {
-    return false;
-  }
-}
-
-/**
  * Main MCP server startup logic.
- * Called when running in server mode (without --auth flag).
+ * Assumes credentials are already validated by the CLI wrapper (bin/cli.js).
+ * The CLI handles:
+ * - Checking for existing credentials
+ * - Auto-prompting for auth if missing (in interactive terminal)
+ * - Failing gracefully in non-interactive environments
  */
 export async function startMCPServer() {
-    // 1. Check if credentials exist
-    if (!hasValidCredentials()) {
-      console.error('❌ No valid credentials found.\n');
-      console.error('Please run authentication first:');
-      console.error('  npx @presto-ai/google-workspace-mcp --auth\n');
-      logToFile('Server startup failed: No valid credentials found');
-      process.exit(1);
-    }
-
-    // 2. Initialize services
+    // 1. Enable debug logging if requested
     if (process.argv.includes('--debug')) {
         setLoggingEnabled(true);
     }

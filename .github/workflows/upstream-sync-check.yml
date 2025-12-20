@@ -1,0 +1,141 @@
+name: Check Upstream Updates
+
+on:
+  schedule:
+    # Run every Monday at midnight UTC
+    - cron: '0 0 * * 1'
+
+  # Allow manual trigger from Actions tab
+  workflow_dispatch:
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check upstream commits
+        id: check
+        run: |
+          UPSTREAM_REPO="gemini-cli-extensions/workspace"
+          LAST_CHECK_FILE=".last-upstream-check"
+
+          echo "Fetching latest commit from upstream: $UPSTREAM_REPO"
+
+          # Get latest commit from upstream main branch
+          LATEST_COMMIT=$(curl -s "https://api.github.com/repos/$UPSTREAM_REPO/commits/main" | jq -r '.sha')
+
+          if [ -z "$LATEST_COMMIT" ] || [ "$LATEST_COMMIT" = "null" ]; then
+            echo "Error: Could not fetch upstream commit"
+            exit 1
+          fi
+
+          echo "Latest upstream commit: $LATEST_COMMIT"
+
+          # Read last known commit
+          if [ -f "$LAST_CHECK_FILE" ]; then
+            LAST_KNOWN_COMMIT=$(cat "$LAST_CHECK_FILE")
+            echo "Last known commit: $LAST_KNOWN_COMMIT"
+          else
+            echo "First run - no previous commit recorded"
+            LAST_KNOWN_COMMIT=""
+          fi
+
+          # Compare commits
+          if [ -z "$LAST_KNOWN_COMMIT" ] || [ "$LATEST_COMMIT" != "$LAST_KNOWN_COMMIT" ]; then
+            echo "new_commits=true" >> $GITHUB_OUTPUT
+            echo "latest_commit=$LATEST_COMMIT" >> $GITHUB_OUTPUT
+            echo "last_known_commit=$LAST_KNOWN_COMMIT" >> $GITHUB_OUTPUT
+            echo "New commits detected!"
+          else
+            echo "new_commits=false" >> $GITHUB_OUTPUT
+            echo "No new commits"
+          fi
+
+      - name: Update commit tracking file
+        if: steps.check.outputs.new_commits == 'true'
+        run: |
+          echo "${{ steps.check.outputs.latest_commit }}" > .last-upstream-check
+
+      - name: Create issue if updates found
+        if: steps.check.outputs.new_commits == 'true'
+        uses: actions/github-script@v7
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const latestCommit = '${{ steps.check.outputs.latest_commit }}';
+            const lastKnown = '${{ steps.check.outputs.last_known_commit }}';
+
+            const title = '⚠️ Upstream Updates Detected';
+            const body = `New commits detected in [gemini-cli-extensions/workspace](https://github.com/gemini-cli-extensions/workspace).
+
+## Details
+
+- **Latest commit**: [\`${latestCommit.substring(0, 7)}\`](https://github.com/gemini-cli-extensions/workspace/commit/${latestCommit})
+- **Last known**: ${lastKnown ? '[\`' + lastKnown.substring(0, 7) + '\`](https://github.com/gemini-cli-extensions/workspace/commit/' + lastKnown + ')' : 'First check'}
+
+## Changes
+
+View changes on GitHub:
+- [Commits since last check](https://github.com/gemini-cli-extensions/workspace/compare/${lastKnown || 'HEAD'}...${latestCommit})
+- [workspace-server changes](https://github.com/gemini-cli-extensions/workspace/tree/main/workspace-server)
+
+## Next Steps
+
+1. Review the upstream changes
+2. Determine if we need to sync:
+   - **Services** (\`src/services/\`) - New features or bug fixes?
+   - **Auth logic** (\`src/auth/\`) - Improvements?
+   - **Utils** (\`src/utils/\`) - Critical fixes?
+3. See [CONTRIBUTING.md](https://github.com/${{ github.repository }}/blob/master/CONTRIBUTING.md#syncing-with-upstream) for sync instructions
+4. Close this issue when sync is complete
+
+## Important
+
+Our modified files that should not be overwritten:
+- \`src/utils/paths.ts\` - We've patched for persistent storage
+- \`bin/cli.js\` - Our dual-mode CLI wrapper
+
+Please review changes before merging.`;
+
+            // Check if issue already exists for this commit
+            const { data: issues } = await github.rest.issues.list({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: ['upstream-sync']
+            });
+
+            const existingIssue = issues.find(issue =>
+              issue.title.includes('⚠️ Upstream Updates Detected') &&
+              issue.body.includes(latestCommit.substring(0, 7))
+            );
+
+            if (existingIssue) {
+              console.log('Issue already exists for this commit');
+              return;
+            }
+
+            // Create new issue
+            const { data: issue } = await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: title,
+              body: body,
+              labels: ['upstream-sync', 'maintenance']
+            });
+
+            console.log(`Created issue #${issue.number}`);
+
+      - name: Commit tracking file update
+        if: steps.check.outputs.new_commits == 'true'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: Update upstream commit tracking"
+          file_pattern: ".last-upstream-check"
+          skip_dirty_check: false
