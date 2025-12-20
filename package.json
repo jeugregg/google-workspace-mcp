@@ -1,6 +1,6 @@
 {
   "name": "@presto-ai/google-workspace-mcp",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "NPM-distributable Google Workspace MCP server for Claude Desktop, Claude Code CLI, and Chatwise",
   "main": "dist/index.js",
   "bin": "./bin/cli.js",
