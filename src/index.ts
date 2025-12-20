@@ -22,7 +22,9 @@ import { SheetsService } from "./services/SheetsService";
 import { GMAIL_SEARCH_MAX_RESULTS } from "./utils/constants";
 import { extractDocId } from "./utils/IdUtils";
 
-import { setLoggingEnabled } from "./utils/logger";
+import { setLoggingEnabled, logToFile } from "./utils/logger";
+import { ENCRYPTED_TOKEN_PATH } from "./utils/paths";
+import * as fs from "node:fs";
 
 // Shared schemas for Gmail tools
 const emailComposeSchema = {
@@ -51,8 +53,33 @@ const SCOPES = [
 // Dynamically import version from package.json
 import { version } from '../package.json';
 
-async function main() {
-    // 1. Initialize services
+/**
+ * Checks if valid credentials exist for the MCP server.
+ * Returns true if credentials file exists, false otherwise.
+ */
+function hasValidCredentials(): boolean {
+  try {
+    return fs.existsSync(ENCRYPTED_TOKEN_PATH);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Main MCP server startup logic.
+ * Called when running in server mode (without --auth flag).
+ */
+export async function startMCPServer() {
+    // 1. Check if credentials exist
+    if (!hasValidCredentials()) {
+      console.error('❌ No valid credentials found.\n');
+      console.error('Please run authentication first:');
+      console.error('  npx @presto-ai/google-workspace-mcp --auth\n');
+      logToFile('Server startup failed: No valid credentials found');
+      process.exit(1);
+    }
+
+    // 2. Initialize services
     if (process.argv.includes('--debug')) {
         setLoggingEnabled(true);
     }
@@ -712,11 +739,13 @@ There are a list of system labels that can be modified on a message:
     // 4. Connect the transport layer and start listening
     const transport = new StdioServerTransport();
     await server.connect(transport);
-    
+
     console.error("Google Workspace MCP Server is running (registerTool). Listening for requests...");
 }
 
-main().catch(error => {
+// Entry point for server mode
+startMCPServer().catch(error => {
     console.error('A critical error occurred:', error);
+    logToFile(`Critical error: ${error instanceof Error ? error.message : String(error)}`);
     process.exit(1);
 });
