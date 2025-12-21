@@ -1,0 +1,170 @@
+name: Sync from Upstream
+
+on:
+  schedule:
+    # Run daily at 6 AM UTC
+    - cron: '0 6 * * *'
+  workflow_dispatch:
+    # Allow manual trigger
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream remote
+        run: |
+          git remote add upstream https://github.com/gemini-cli-extensions/workspace.git || true
+          git fetch upstream
+
+      - name: Check for upstream changes
+        id: check_changes
+        run: |
+          # Get the last synced upstream commit (stored in a file)
+          LAST_SYNC=""
+          if [ -f ".last-upstream-sync" ]; then
+            LAST_SYNC=$(cat .last-upstream-sync)
+          fi
+
+          # Get current upstream HEAD
+          UPSTREAM_HEAD=$(git rev-parse upstream/main)
+
+          echo "Last sync: $LAST_SYNC"
+          echo "Upstream HEAD: $UPSTREAM_HEAD"
+
+          if [ "$LAST_SYNC" = "$UPSTREAM_HEAD" ]; then
+            echo "No changes in upstream"
+            echo "has_changes=false" >> $GITHUB_OUTPUT
+          else
+            echo "Upstream has new changes"
+            echo "has_changes=true" >> $GITHUB_OUTPUT
+            echo "upstream_head=$UPSTREAM_HEAD" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Sync source from upstream
+        if: steps.check_changes.outputs.has_changes == 'true'
+        run: |
+          # Remove current src directory
+          rm -rf src
+
+          # Create directory structure
+          mkdir -p src/auth/token-storage src/services src/utils
+
+          # Copy source files from upstream
+          git show upstream/main:workspace-server/src/index.ts > src/index.ts
+
+          # Copy auth files
+          for file in auth/AuthManager.ts auth/token-storage/base-token-storage.ts auth/token-storage/file-token-storage.ts auth/token-storage/hybrid-token-storage.ts auth/token-storage/index.ts auth/token-storage/keychain-token-storage.ts auth/token-storage/oauth-credential-storage.ts auth/token-storage/types.ts; do
+            git show "upstream/main:workspace-server/src/$file" > "src/$file"
+          done
+
+          # Copy services
+          for file in CalendarService.ts ChatService.ts DocsService.ts DriveService.ts GmailService.ts PeopleService.ts SheetsService.ts SlidesService.ts TimeService.ts; do
+            git show "upstream/main:workspace-server/src/services/$file" > "src/services/$file"
+          done
+
+          # Copy utils (except paths.ts which we customize)
+          for file in DriveQueryBuilder.ts GaxiosConfig.ts IdUtils.ts MimeHelper.ts constants.ts logger.ts markdownToDocsRequests.ts open-wrapper.ts secure-browser-launcher.ts validation.ts; do
+            git show "upstream/main:workspace-server/src/utils/$file" > "src/utils/$file"
+          done
+
+          # Copy build config
+          git show upstream/main:workspace-server/esbuild.config.js > esbuild.config.js
+
+          # Restore our custom paths.ts for npm distribution
+          cat > src/utils/paths.ts << 'PATHS_EOF'
+          /**
+           * @license
+           * Copyright 2025 Google LLC
+           * SPDX-License-Identifier: Apache-2.0
+           */
+
+          import path from 'node:path';
+          import * as os from 'node:os';
+
+          function getConfigDir(): string {
+            const homeDir = os.homedir();
+            if (process.env.GOOGLE_WORKSPACE_MCP_HOME) {
+              return process.env.GOOGLE_WORKSPACE_MCP_HOME;
+            }
+            switch (process.platform) {
+              case 'win32':
+                return path.join(
+                  process.env.APPDATA || path.join(homeDir, 'AppData', 'Roaming'),
+                  'google-workspace-mcp'
+                );
+              default:
+                return path.join(homeDir, '.config', 'google-workspace-mcp');
+            }
+          }
+
+          export const CONFIG_DIR = getConfigDir();
+          export const PROJECT_ROOT = CONFIG_DIR;
+          export const ENCRYPTED_TOKEN_PATH = path.join(CONFIG_DIR, 'gemini-cli-workspace-token.json');
+          export const ENCRYPTION_MASTER_KEY_PATH = path.join(CONFIG_DIR, '.gemini-cli-workspace-master-key');
+          PATHS_EOF
+
+          # Update last sync marker
+          echo "${{ steps.check_changes.outputs.upstream_head }}" > .last-upstream-sync
+
+      - name: Bump version
+        if: steps.check_changes.outputs.has_changes == 'true'
+        id: bump_version
+        run: |
+          # Read current version
+          CURRENT_VERSION=$(node -p "require('./package.json').version")
+
+          # Bump patch version
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT_VERSION"
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VERSION="$MAJOR.$MINOR.$NEW_PATCH"
+
+          # Update package.json
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            pkg.version = '$NEW_VERSION';
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+          "
+
+          echo "new_version=$NEW_VERSION" >> $GITHUB_OUTPUT
+          echo "Version bumped from $CURRENT_VERSION to $NEW_VERSION"
+
+      - name: Commit changes
+        if: steps.check_changes.outputs.has_changes == 'true'
+        run: |
+          git add -A
+          git commit -m "Sync from upstream v${{ steps.bump_version.outputs.new_version }}"
+          git push origin master
+
+      - name: Create release
+        if: steps.check_changes.outputs.has_changes == 'true'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: v${{ steps.bump_version.outputs.new_version }}
+          name: Release v${{ steps.bump_version.outputs.new_version }}
+          body: |
+            ## Automated sync from upstream
+
+            This release syncs changes from [gemini-cli-extensions/workspace](https://github.com/gemini-cli-extensions/workspace).
+
+            ### Installation
+            ```bash
+            npx @presto-ai/google-workspace-mcp
+            ```
+          draft: false
+          prerelease: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
