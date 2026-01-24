@@ -10,6 +10,57 @@ import { gaxiosOptions } from '../utils/GaxiosConfig';
 import { iso8601DateTimeSchema, emailArraySchema } from '../utils/validation';
 import { z } from 'zod';
 
+export interface CreateEventInput {
+  calendarId?: string;
+  summary: string;
+  description?: string;
+  start: { dateTime: string };
+  end: { dateTime: string };
+  attendees?: string[];
+}
+
+export interface ListEventsInput {
+  calendarId?: string;
+  timeMin?: string;
+  timeMax?: string;
+  attendeeResponseStatus?: string[];
+}
+
+export interface GetEventInput {
+  eventId: string;
+  calendarId?: string;
+}
+
+export interface DeleteEventInput {
+  eventId: string;
+  calendarId?: string;
+}
+
+export interface UpdateEventInput {
+  eventId: string;
+  calendarId?: string;
+  summary?: string;
+  description?: string;
+  start?: { dateTime: string };
+  end?: { dateTime: string };
+  attendees?: string[];
+}
+
+export interface RespondToEventInput {
+  eventId: string;
+  calendarId?: string;
+  responseStatus: 'accepted' | 'declined' | 'tentative';
+  sendNotification?: boolean;
+  responseMessage?: string;
+}
+
+export interface FindFreeTimeInput {
+  attendees: string[];
+  timeMin: string;
+  timeMax: string;
+  duration: number;
+}
+
 export class CalendarService {
   private primaryCalendarId: string | null = null;
 
@@ -89,8 +140,8 @@ export class CalendarService {
     }
   }
 
-  createEvent = async (input: { calendarId?: string, summary: string, start: { dateTime: string }, end: { dateTime: string }, attendees?: string[] }) => {
-    const { calendarId, summary, start, end, attendees } = input;
+  createEvent = async (input: CreateEventInput) => {
+    const { calendarId, summary, description, start, end, attendees } = input;
     
     // Validate datetime formats
     try {
@@ -106,12 +157,14 @@ export class CalendarService {
     const finalCalendarId = calendarId || await this.getPrimaryCalendarId();
     logToFile(`Creating event in calendar: ${finalCalendarId}`);
     logToFile(`Event summary: ${summary}`);
+    if (description) logToFile(`Event description: ${description}`);
     logToFile(`Event start: ${start.dateTime}`);
     logToFile(`Event end: ${end.dateTime}`);
     logToFile(`Event attendees: ${attendees?.join(', ')}`);
     try {
       const event = {
         summary,
+        description,
         start,
         end,
         attendees: attendees?.map(email => ({ email }))
@@ -140,7 +193,7 @@ export class CalendarService {
     }
   }
 
-  listEvents = async (input: { calendarId?: string, timeMin?: string, timeMax?: string, attendeeResponseStatus?: string[] }) => {
+  listEvents = async (input: ListEventsInput) => {
     const { calendarId, timeMin = (new Date()).toISOString(), attendeeResponseStatus = ['accepted', 'tentative', 'needsAction'] } = input;
     
     let timeMax = input.timeMax;
@@ -197,7 +250,7 @@ export class CalendarService {
     }
   }
 
-  getEvent = async (input: { eventId: string, calendarId?: string }) => {
+  getEvent = async (input: GetEventInput) => {
     const { eventId, calendarId } = input;
     const finalCalendarId = calendarId || await this.getPrimaryCalendarId();
     logToFile(`Getting event ${eventId} from calendar: ${finalCalendarId}`);
@@ -226,7 +279,7 @@ export class CalendarService {
     }
   }
 
-  deleteEvent = async (input: { eventId: string, calendarId?: string }) => {
+  deleteEvent = async (input: DeleteEventInput) => {
     const { eventId, calendarId } = input;
     const finalCalendarId = calendarId || await this.getPrimaryCalendarId();
     logToFile(`Deleting event ${eventId} from calendar: ${finalCalendarId}`);
@@ -257,8 +310,8 @@ export class CalendarService {
     }
   }
 
-  updateEvent = async (input: { eventId: string, calendarId?: string, summary?: string, start?: { dateTime: string }, end?: { dateTime: string }, attendees?: string[] }) => {
-    const { eventId, calendarId, summary, start, end, attendees } = input;
+  updateEvent = async (input: UpdateEventInput) => {
+    const { eventId, calendarId, summary, description, start, end, attendees } = input;
 
     // Validate datetime formats if provided
     try {
@@ -284,6 +337,7 @@ export class CalendarService {
       // Build request body with only the fields to update (patch semantics)
       const requestBody: calendar_v3.Schema$Event = {};
       if (summary !== undefined) requestBody.summary = summary;
+      if (description !== undefined) requestBody.description = description;
       if (start) requestBody.start = start;
       if (end) requestBody.end = end;
       if (attendees) requestBody.attendees = attendees.map(email => ({ email }));
@@ -313,7 +367,7 @@ export class CalendarService {
     }
   }
 
-  respondToEvent = async (input: { eventId: string, calendarId?: string, responseStatus: 'accepted' | 'declined' | 'tentative', sendNotification?: boolean, responseMessage?: string }) => {
+  respondToEvent = async (input: RespondToEventInput) => {
     const { eventId, calendarId, responseStatus, sendNotification = true, responseMessage } = input;
     const finalCalendarId = calendarId || await this.getPrimaryCalendarId();
 
@@ -394,7 +448,7 @@ export class CalendarService {
     }
   }
 
-  findFreeTime = async (input: { attendees: string[], timeMin: string, timeMax: string, duration: number }) => {
+  findFreeTime = async (input: FindFreeTimeInput) => {
     const { attendees, timeMin, timeMax, duration } = input;
 
     // Validate datetime formats
