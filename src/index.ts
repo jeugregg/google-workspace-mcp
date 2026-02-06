@@ -373,6 +373,51 @@ async function main() {
     slidesService.getMetadata,
   );
 
+  server.registerTool(
+    'slides.getImages',
+    {
+      description:
+        'Downloads all images embedded in a Google Slides presentation to a local directory.',
+      inputSchema: {
+        presentationId: z
+          .string()
+          .describe(
+            'The ID or URL of the presentation to extract images from.',
+          ),
+        localPath: z
+          .string()
+          .describe(
+            'The absolute local directory path to download the images to (e.g., "/Users/name/downloads/images").',
+          ),
+      },
+    },
+    slidesService.getImages,
+  );
+
+  server.registerTool(
+    'slides.getSlideThumbnail',
+    {
+      description:
+        'Downloads a thumbnail image for a specific slide in a Google Slides presentation to a local path.',
+      inputSchema: {
+        presentationId: z
+          .string()
+          .describe('The ID or URL of the presentation.'),
+        slideObjectId: z
+          .string()
+          .describe(
+            'The object ID of the slide (can be found via slides.getMetadata or slides.getText).',
+          ),
+        localPath: z
+          .string()
+          .describe(
+            'The absolute local file path to download the thumbnail to (e.g., "/Users/name/downloads/slide1.png").',
+          ),
+      },
+    },
+    slidesService.getSlideThumbnail,
+  );
+
   // Sheets tools
   server.registerTool(
     'sheets.getText',
