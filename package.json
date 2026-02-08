@@ -1,6 +1,6 @@
 {
   "name": "@presto-ai/google-workspace-mcp",
-  "version": "1.0.31",
+  "version": "1.0.32",
   "description": "Google Workspace MCP Server - npm distribution",
   "main": "dist/index.js",
   "bin": "./bin/cli.js",
