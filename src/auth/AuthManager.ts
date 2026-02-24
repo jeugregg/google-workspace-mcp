@@ -175,6 +175,8 @@ export class AuthManager {
     }
 
     const webLogin = await this.authWithWeb(oAuth2Client);
+    console.error(`\n🔐 Ouvre ce lien dans ton navigateur pour t'authentifier :\n`);
+    console.error(`👉 ${webLogin.authUrl}\n`);
     await open(webLogin.authUrl);
     const msg = 'Waiting for authentication... Check your browser.';
     logToFile(msg);
