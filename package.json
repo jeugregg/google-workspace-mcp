@@ -6,8 +6,9 @@
   "bin": "./bin/cli.js",
   "type": "commonjs",
   "scripts": {
-    "build": "node esbuild.config.js",
-    "prepublishOnly": "npm run build"
+  "build": "node esbuild.config.js",
+  "prepare": "npm run build",
+  "prepublishOnly": "npm run build"
   },
   "keywords": [
     "mcp",
