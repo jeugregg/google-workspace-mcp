@@ -1,5 +1,5 @@
 {
-  "name": "jeugregg/google-workspace-mcp",
+  "name": "@jeugregg/google-workspace-mcp",
   "version": "1.0.37",
   "description": "Google Workspace MCP Server - npm distribution",
   "main": "dist/index.js",
