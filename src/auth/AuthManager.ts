@@ -6,6 +6,7 @@
 
 import { google, Auth } from 'googleapis';
 import crypto from 'node:crypto';
+import * as fs from 'node:fs';
 import * as http from 'node:http';
 import * as net from 'node:net';
 import * as url from 'node:url';
@@ -19,12 +20,8 @@ const config = loadConfig();
 const CLIENT_ID = config.clientId;
 const CLOUD_FUNCTION_URL = config.cloudFunctionUrl;
 const TOKEN_EXPIRY_BUFFER_MS = 5 * 60 * 1000; // 5 minutes
+const AUTH_URL_FILE = '/tmp/auth_url.txt';
 
-/**
- * An Authentication URL for updating the credentials of a Oauth2Client
- * as well as a promise that will resolve when the credentials have
- * been refreshed (or which throws error when refreshing credentials failed).
- */
 interface OauthWebLogin {
   authUrl: string;
   loginCompletePromise: Promise<void>;
@@ -56,7 +53,6 @@ export class AuthManager {
     const credentials = await OAuthCredentialStorage.loadCredentials();
 
     if (credentials) {
-      // Check if saved token has required scopes
       const savedScopes = new Set(credentials.scope?.split(' ') ?? []);
       logToFile(`Cached token has scopes: ${[...savedScopes].join(', ')}`);
       logToFile(`Required scopes: ${this.scopes.join(', ')}`);
@@ -66,9 +62,7 @@ export class AuthManager {
       );
 
       if (missingScopes.length > 0) {
-        logToFile(
-          `Token cache missing required scopes: ${missingScopes.join(', ')}`,
-        );
+        logToFile(`Token cache missing required scopes: ${missingScopes.join(', ')}`);
         logToFile('Removing cached token to force re-authentication...');
         await OAuthCredentialStorage.clearCredentials();
         return false;
@@ -84,23 +78,15 @@ export class AuthManager {
   public async getAuthenticatedClient(): Promise<Auth.OAuth2Client> {
     logToFile('getAuthenticatedClient called');
 
-    // Check if we have a cached client with valid credentials
     if (
       this.client &&
       this.client.credentials &&
       this.client.credentials.refresh_token
     ) {
       logToFile('Returning existing cached client with valid credentials');
-      logToFile(
-        `Access token exists: ${!!this.client.credentials.access_token}`,
-      );
-      logToFile(`Expiry date: ${this.client.credentials.expiry_date}`);
-      logToFile(`Current time: ${Date.now()}`);
-
       const isExpired = this.isTokenExpiringSoon(this.client.credentials);
       logToFile(`Token expired: ${isExpired}`);
 
-      // Proactively refresh if expired
       if (isExpired) {
         logToFile('Token is expired, refreshing proactively...');
         try {
@@ -108,19 +94,16 @@ export class AuthManager {
           logToFile('Token refreshed successfully');
         } catch (error) {
           logToFile(`Failed to refresh token: ${error}`);
-          // Clear the client and fall through to re-authenticate
           this.client = null;
           await OAuthCredentialStorage.clearCredentials();
         }
       }
 
-      // Return the client (either still valid or just refreshed)
       if (this.client) {
         return this.client;
       }
     }
 
-    // Note: No clientSecret is provided here. The secret is only known by the cloud function.
     const options: Auth.OAuth2ClientOptions = {
       clientId: CLIENT_ID,
     };
@@ -128,12 +111,7 @@ export class AuthManager {
 
     oAuth2Client.on('tokens', async (tokens) => {
       logToFile('Tokens refreshed event received');
-      if (tokens.refresh_token) {
-        logToFile('New refresh token received in event');
-      }
-
       try {
-        // Create a copy to preserve refresh_token from storage
         const current = (await OAuthCredentialStorage.loadCredentials()) || {};
         const merged = {
           ...tokens,
@@ -151,10 +129,7 @@ export class AuthManager {
       logToFile('Loaded saved credentials, caching and returning client');
       this.client = oAuth2Client;
 
-      // Check if the loaded token is expired and refresh proactively
       const isExpired = this.isTokenExpiringSoon(this.client.credentials);
-      logToFile(`Token expired: ${isExpired}`);
-
       if (isExpired) {
         logToFile('Loaded token is expired, refreshing proactively...');
         try {
@@ -162,40 +137,57 @@ export class AuthManager {
           logToFile('Token refreshed successfully after loading from storage');
         } catch (error) {
           logToFile(`Failed to refresh loaded token: ${error}`);
-          // Clear the client and fall through to re-authenticate
           this.client = null;
           await OAuthCredentialStorage.clearCredentials();
         }
       }
 
-      // Return the client if refresh succeeded or token was still valid
       if (this.client) {
         return this.client;
       }
     }
 
     const webLogin = await this.authWithWeb(oAuth2Client);
-    console.error(`\n🔐 Ouvre ce lien dans ton navigateur pour t'authentifier :\n`);
-    console.error(`👉 ${webLogin.authUrl}\n`);
-    await open(webLogin.authUrl);
-    const msg = 'Waiting for authentication... Check your browser.';
+
+    // FIX 1 : Écrit l'URL dans un fichier lisible même en headless
+    try {
+      fs.writeFileSync(AUTH_URL_FILE, webLogin.authUrl + '\n');
+      logToFile(`Auth URL written to ${AUTH_URL_FILE}`);
+    } catch (e) {
+      logToFile(`Could not write auth URL to file: ${e}`);
+    }
+
+    // FIX 2 : Affiche l'URL clairement dans stderr même sans browser
+    console.error('\n\n🔐 ===== AUTHENTIFICATION REQUISE =====');
+    console.error(`👉 Ouvre ce lien dans ton navigateur :\n\n${webLogin.authUrl}\n`);
+    console.error(`📁 URL aussi disponible dans : ${AUTH_URL_FILE}`);
+    console.error('======================================\n');
+
+    // FIX 3 : Tente d'ouvrir le browser mais ne crashe pas si X11 absent
+    try {
+      await open(webLogin.authUrl);
+    } catch (e) {
+      logToFile(`Could not open browser (headless mode): ${e}`);
+    }
+
+    const msg = 'Waiting for authentication... Check your browser or open the URL above.';
     logToFile(msg);
     if (this.onStatusUpdate) {
       this.onStatusUpdate(msg);
     }
 
-    // Add timeout to prevent infinite waiting when browser tab gets stuck
-    const authTimeout = 5 * 60 * 1000; // 5 minutes timeout
+    const authTimeout = 5 * 60 * 1000;
     const timeoutPromise = new Promise<never>((_, reject) => {
       setTimeout(() => {
         reject(
           new Error(
-            'User is not authenticated. Authentication timed out after 5 minutes. The user did not complete the login process in the browser. ' +
-              'Please ask the user to check their browser and try again.',
+            'Authentication timed out after 5 minutes. ' +
+            `Open this URL in your browser: ${webLogin.authUrl}`,
           ),
         );
       }, authTimeout);
     });
+
     await Promise.race([webLogin.loginCompletePromise, timeoutPromise]);
 
     await OAuthCredentialStorage.saveCredentials(oAuth2Client.credentials);
@@ -207,6 +199,8 @@ export class AuthManager {
     logToFile('Clearing authentication...');
     this.client = null;
     await OAuthCredentialStorage.clearCredentials();
+    // FIX 4 : Nettoie aussi le fichier d'URL temporaire
+    try { fs.unlinkSync(AUTH_URL_FILE); } catch (_) {}
     logToFile('Authentication cleared.');
   }
 
@@ -225,32 +219,21 @@ export class AuthManager {
 
       logToFile('Calling cloud function to refresh token...');
 
-      // Call the cloud function refresh endpoint
-      // The cloud function has the client secret needed for token refresh
       const response = await fetch(`${CLOUD_FUNCTION_URL}/refreshToken`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          refresh_token: currentCredentials.refresh_token,
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ refresh_token: currentCredentials.refresh_token }),
       });
 
       if (!response.ok) {
         const errorText = await response.text();
-        throw new Error(
-          `Token refresh failed: ${response.status} ${errorText}`,
-        );
+        throw new Error(`Token refresh failed: ${response.status} ${errorText}`);
       }
 
       const newTokens = await response.json();
-
-      // Merge new tokens with existing credentials, preserving refresh_token
-      // Note: Google does NOT return a new refresh_token on refresh
       const mergedCredentials = {
         ...newTokens,
-        refresh_token: currentCredentials.refresh_token, // Always preserve original
+        refresh_token: currentCredentials.refresh_token,
       };
 
       this.client.setCredentials(mergedCredentials);
@@ -264,27 +247,21 @@ export class AuthManager {
 
   private async getAvailablePort(): Promise<number> {
     return new Promise((resolve, reject) => {
-      let port = 0;
       try {
         const portStr = process.env['OAUTH_CALLBACK_PORT'];
         if (portStr) {
-          port = parseInt(portStr, 10);
+          const port = parseInt(portStr, 10);
           if (isNaN(port) || port <= 0 || port > 65535) {
-            return reject(
-              new Error(`Invalid value for OAUTH_CALLBACK_PORT: "${portStr}"`),
-            );
+            return reject(new Error(`Invalid value for OAUTH_CALLBACK_PORT: "${portStr}"`));
           }
           return resolve(port);
         }
         const server = net.createServer();
+        let port = 0;
         server.listen(0, () => {
-          const address = server.address()! as net.AddressInfo;
-          port = address.port;
+          port = (server.address()! as net.AddressInfo).port;
         });
-        server.on('listening', () => {
-          server.close();
-          server.unref();
-        });
+        server.on('listening', () => { server.close(); server.unref(); });
         server.on('error', (e) => reject(e));
         server.on('close', () => resolve(port));
       } catch (e) {
@@ -294,21 +271,14 @@ export class AuthManager {
   }
 
   private async authWithWeb(client: Auth.OAuth2Client): Promise<OauthWebLogin> {
-    logToFile(
-      `Requesting authentication with scopes: ${this.scopes.join(', ')}`,
-    );
+    logToFile(`Requesting authentication with scopes: ${this.scopes.join(', ')}`);
 
     const port = await this.getAvailablePort();
     const host = process.env['OAUTH_CALLBACK_HOST'] || 'localhost';
-
     const localRedirectUri = `http://${host}:${port}/oauth2callback`;
-
     const isGuiAvailable = shouldLaunchBrowser();
 
-    // SECURITY: Generate a random token for CSRF protection.
     const csrfToken = crypto.randomBytes(32).toString('hex');
-
-    // The state now contains a JSON payload indicating the flow mode and CSRF token.
     const statePayload = {
       uri: isGuiAvailable ? localRedirectUri : undefined,
       manual: !isGuiAvailable,
@@ -316,78 +286,63 @@ export class AuthManager {
     };
     const state = Buffer.from(JSON.stringify(statePayload)).toString('base64');
 
-    // The redirect URI for Google's auth server is the cloud function
-    const cloudFunctionRedirectUri = CLOUD_FUNCTION_URL;
-
     const authUrl = client.generateAuthUrl({
-      redirect_uri: cloudFunctionRedirectUri, // Tell Google to go to the cloud function
+      redirect_uri: CLOUD_FUNCTION_URL,
       access_type: 'offline',
       scope: this.scopes,
-      state: state, // Pass our JSON payload in the state
-      prompt: 'consent', // Make sure we get a refresh token
+      state: state,
+      prompt: 'consent',
     });
 
     const loginCompletePromise = new Promise<void>((resolve, reject) => {
       const server = http.createServer(async (req, res) => {
         try {
-          // Use startsWith for more robust path checking.
           if (!req.url || !req.url.startsWith('/oauth2callback')) {
             res.end();
-            reject(
-              new Error(
-                'OAuth callback not received. Unexpected request: ' + req.url,
-              ),
-            );
+            reject(new Error('OAuth callback not received. Unexpected request: ' + req.url));
             return;
           }
 
-          const qs = new url.URL(req.url, `http://${host}:${port}`)
-            .searchParams;
+          const qs = new url.URL(req.url, `http://${host}:${port}`).searchParams;
 
-          // SECURITY: Validate the state parameter to prevent CSRF attacks.
+          // FIX 5 : CSRF check robuste — gère les deux cas (csrf brut OU base64 JSON)
           const returnedState = qs.get('state');
-          if (returnedState !== csrfToken) {
+          let csrfValid = returnedState === csrfToken;
+          if (!csrfValid && returnedState) {
+            try {
+              const decoded = JSON.parse(Buffer.from(returnedState, 'base64').toString());
+              csrfValid = decoded.csrf === csrfToken;
+            } catch (_) {}
+          }
+          if (!csrfValid) {
             res.end('State mismatch. Possible CSRF attack.');
             reject(new Error('OAuth state mismatch. Possible CSRF attack.'));
             return;
           }
 
           if (qs.get('error')) {
-            const errorCode = qs.get('error');
-            const errorDescription =
-              qs.get('error_description') || 'No additional details provided';
             res.end();
-            reject(
-              new Error(
-                `Google OAuth error: ${errorCode}. ${errorDescription}`,
-              ),
-            );
+            reject(new Error(`Google OAuth error: ${qs.get('error')}. ${qs.get('error_description') || ''}`));
             return;
           }
 
           const access_token = qs.get('access_token');
           const refresh_token = qs.get('refresh_token');
-          const scope = qs.get('scope');
-          const token_type = qs.get('token_type');
           const expiry_date_str = qs.get('expiry_date');
 
           if (access_token && expiry_date_str) {
             const tokens: Auth.Credentials = {
-              access_token: access_token,
+              access_token,
               refresh_token: refresh_token || null,
-              scope: scope || undefined,
-              token_type: (token_type as 'Bearer') || undefined,
+              scope: qs.get('scope') || undefined,
+              token_type: (qs.get('token_type') as 'Bearer') || undefined,
               expiry_date: parseInt(expiry_date_str, 10),
             };
             client.setCredentials(tokens);
             res.end('Authentication successful! Please return to the console.');
             resolve();
           } else {
-            reject(
-              new Error(
-                'Authentication failed: Did not receive tokens from callback.',
-              ),
-            );
+            reject(new Error('Authentication failed: Did not receive tokens from callback.'));
           }
         } catch (e) {
           reject(e);
@@ -396,18 +351,10 @@ export class AuthManager {
         }
       });
 
-      server.listen(port, host, () => {
-        // Server started successfully
-      });
-
-      server.on('error', (err) => {
-        reject(new Error(`OAuth callback server error: ${err}`));
-      });
+      server.listen(port, host, () => {});
+      server.on('error', (err) => reject(new Error(`OAuth callback server error: ${err}`)));
     });
 
-    return {
-      authUrl,
-      loginCompletePromise,
-    };
+    return { authUrl, loginCompletePromise };
   }
 }
